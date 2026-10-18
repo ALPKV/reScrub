@@ -1,0 +1,10 @@
+.env
+data/
+models/
+out/
+__pycache__/
+*.pyc
+.pytest_cache/
+mobileclip*.ts
+*.pt
+runs/

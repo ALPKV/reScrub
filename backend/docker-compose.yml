@@ -1,0 +1,60 @@
+# reScrub backend. Pick the role with a profile (see docs/DEPLOY.md):
+#
+#   Web server (website + API, Caddy on the host):
+#     docker compose --profile api up -d --build
+#   GPU server (labeling, tracking, analysis, training):
+#     docker compose --profile worker up -d --build
+#   Development on one machine with a throwaway TimescaleDB:
+#     docker compose --profile api --profile localdb up -d
+#
+# Both servers read the same .env (Tiger Cloud DATABASE_URL, Vultr Object Storage keys).
+
+services:
+  api:
+    profiles: ["api"]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    image: rescrub-api
+    env_file: .env
+    ports:
+      - "127.0.0.1:8000:8000"   # only the host's Caddy can reach it
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  worker:
+    profiles: ["worker"]
+    build: .
+    image: rescrub-worker
+    command: ["python", "-m", "rescrub.worker"]
+    env_file: .env
+    volumes:
+      - ${MODELS_HOST_DIR:-./models/trained}:/models/trained  # trained weights survive rebuilds
+      - ${DATA_HOST_DIR:-/mnt/data}:/data             # MM-OR + training runs
+    restart: unless-stopped
+    stop_grace_period: 2m       # lets the current job finish its batch
+    shm_size: 16gb              # PyTorch data loaders during training
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  db:
+    profiles: ["localdb"]
+    image: timescale/timescaledb-ha:pg17
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: rescrub
+    volumes:
+      - pgdata:/home/postgres/pgdata/data
+    ports: ["127.0.0.1:5432:5432"]
+
+volumes:
+  pgdata:
